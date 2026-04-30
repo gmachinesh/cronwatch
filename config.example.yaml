@@ -1,0 +1,31 @@
+# cronwatch example configuration
+# Copy to config.yaml and adjust to your environment.
+
+# log_level controls verbosity: debug | info | warn | error
+log_level: info
+
+jobs:
+  # A nightly database backup expected every 24 hours.
+  - name: db-backup
+    schedule: "0 2 * * *"   # cron expression (standard 5-field)
+    timeout: 1h              # alert if job runs longer than this
+    command: /usr/local/bin/db-backup.sh
+
+  # Hourly cache warm-up; tight drift tolerance.
+  - name: cache-warmup
+    schedule: "0 * * * *"
+    timeout: 5m
+    command: /opt/scripts/warm-cache.sh
+
+  # Every 15 minutes health ping.
+  - name: health-ping
+    schedule: "*/15 * * * *"
+    timeout: 30s
+    command: curl -sf https://healthcheck.example.com/ping
+
+alerts:
+  # Send failure notifications to this address (leave blank to disable).
+  email: ops@example.com
+
+  # Slack incoming webhook URL (leave blank to disable).
+  slack_url: https://hooks.slack.com/services/T000/B000/xxxx
