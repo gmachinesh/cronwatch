@@ -2,6 +2,7 @@ package history
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -11,62 +12,120 @@ import (
 type Entry struct {
 	JobName   string        `json:"job_name"`
 	StartedAt time.Time     `json:"started_at"`
-	Duration  time.Duration `json:"duration"`
+	Duration  time.Duration `json:"duration_ns"`
 	Success   bool          `json:"success"`
 	Output    string        `json:"output,omitempty"`
 	Error     string        `json:"error,omitempty"`
 }
 
-// Store persists job execution history to a JSON file.
-type Store struct {
-	mu      sync.Mutex
-	path    string
-	entries []Entry
+// History manages persistent job execution history stored as newline-delimited JSON.
+type History struct {
+	mu   sync.Mutex
+	path string
 }
 
-// New creates a new Store backed by the given file path.
-// Existing entries are loaded if the file exists.
-func New(path string) (*Store, error) {
-	s := &Store{path: path}
-	if err := s.load(); err != nil && !os.IsNotExist(err) {
+// New opens (or creates) a history file at the given path.
+func New(path string) (*History, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("history: open %s: %w", path, err)
+	}
+	f.Close()
+	return &History{path: path}, nil
+}
+
+// Append writes a new entry to the history file.
+func (h *History) Append(e Entry) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	f, err := os.OpenFile(h.path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("history: append open: %w", err)
+	}
+	defer f.Close()
+
+	line, err := json.Marshal(e)
+	if err != nil {
+		return fmt.Errorf("history: marshal: %w", err)
+	}
+	_, err = fmt.Fprintf(f, "%s\n", line)
+	return err
+}
+
+// Recent returns the last n entries, optionally filtered by jobName (empty = all jobs).
+func (h *History) Recent(n int, jobName string) ([]Entry, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	all, err := h.readAll()
+	if err != nil {
 		return nil, err
 	}
-	return s, nil
-}
 
-// Append adds a new entry and flushes to disk.
-func (s *Store) Append(e Entry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.entries = append(s.entries, e)
-	return s.flush()
-}
-
-// Recent returns the last n entries for the given job name.
-func (s *Store) Recent(jobName string, n int) []Entry {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var result []Entry
-	for i := len(s.entries) - 1; i >= 0 && len(result) < n; i-- {
-		if s.entries[i].JobName == jobName {
-			result = append([]Entry{s.entries[i]}, result...)
+	var filtered []Entry
+	for _, e := range all {
+		if jobName == "" || e.JobName == jobName {
+			filtered = append(filtered, e)
 		}
 	}
-	return result
+
+	if n > 0 && len(filtered) > n {
+		filtered = filtered[len(filtered)-n:]
+	}
+	return filtered, nil
 }
 
-func (s *Store) load() error {
-	data, err := os.ReadFile(s.path)
+// readAll reads every entry from the file. Caller must hold h.mu.
+func (h *History) readAll() ([]Entry, error) {
+	data, err := os.ReadFile(h.path)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("history: read: %w", err)
 	}
-	return json.Unmarshal(data, &s.entries)
+	var entries []Entry
+	for _, raw := range splitLines(data) {
+		if len(raw) == 0 {
+			continue
+		}
+		var e Entry
+		if err := json.Unmarshal(raw, &e); err != nil {
+			continue // skip malformed lines
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
 }
 
-func (s *Store) flush() error {
-	data, err := json.MarshalIndent(s.entries, "", "  ")
+// writeAll rewrites the entire history file with the given entries.
+func (h *History) writeAll(entries []Entry) error {
+	f, err := os.OpenFile(h.path, os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return fmt.Errorf("history: writeAll open: %w", err)
 	}
-	return os.WriteFile(s.path, data, 0o644)
+	defer f.Close()
+	for _, e := range entries {
+		line, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(f, "%s\n", line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func splitLines(data []byte) [][]byte {
+	var lines [][]byte
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			lines = append(lines, data[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		lines = append(lines, data[start:])
+	}
+	return lines
 }
