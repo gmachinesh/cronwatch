@@ -1,46 +1,36 @@
-# cronwatch HTTP API
+# internal/api
 
-The `api` package exposes a lightweight read-only HTTP interface for inspecting
-cronwatch's runtime state.
+HTTP API server for cronwatch.
 
 ## Endpoints
 
-### `GET /healthz`
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/healthz` | Liveness check |
+| GET | `/status` | Current job states |
+| GET | `/history` | Recent execution history |
 
-Returns `{"status": "ok"}` when the daemon is running.
+## Authentication
 
-```json
-{"status": "ok"}
-```
+Optional API key authentication is supported via the `X-API-Key` request header.
 
-### `GET /status`
-
-Returns the current state of every monitored job.
-
-```json
-[
-  {
-    "job": "backup",
-    "last_run_at": "2024-01-15T03:00:00Z",
-    "last_result": "success",
-    "drifted": false
-  }
-]
-```
-
-### `GET /history?job=<name>`
-
-Returns the most recent 50 history records for the given job.
-Omit `job` to retrieve records for all jobs.
-
-## Configuration
-
-Enable the API in `config.yaml`:
+Set `api.key` in your `config.yaml` to enable it:
 
 ```yaml
 api:
-  enabled: true
   addr: ":8080"
+  key: "your-secret-key"
 ```
 
-Defaults to `disabled`. When disabled the HTTP server is not started.
+When a key is configured:
+- Requests without the `X-API-Key` header receive **401 Unauthorized**.
+- Requests with an incorrect key receive **403 Forbidden**.
+- Requests with the correct key are passed through normally.
+
+If `api.key` is empty or omitted, all requests are allowed without authentication.
+
+## Middleware
+
+- **loggingMiddleware** — logs method, path, status, and duration for every request.
+- **methodGuard** — restricts each route to its allowed HTTP method.
+- **apiKeyAuth** — enforces static API key authentication when configured.
