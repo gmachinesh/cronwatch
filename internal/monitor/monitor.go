@@ -1,86 +1,93 @@
 package monitor
 
 import (
-	"log"
+	"fmt"
 	"sync"
 	"time"
 
-	"cronwatch/internal/config"
+	"github.com/cronwatch/internal/config"
+	"github.com/cronwatch/internal/notifier"
 )
 
-// JobState tracks the last execution time and status of a cron job.
-type JobState struct {
-	Name        string
-	LastSeen    time.Time
-	MissedCount int
-	Failed      bool
+// State holds runtime information for a single job.
+type State struct {
+	LastRun   time.Time
+	LastError error
+	Drifted   bool
 }
 
-// Monitor watches registered jobs and detects drift or failure.
+// Monitor tracks job execution state and triggers alerts.
 type Monitor struct {
-	mu     sync.Mutex
-	jobs   map[string]*JobState
-	cfg    *config.Config
-	alerts AlertSender
+	mu       sync.RWMutex
+	states   map[string]*State
+	cfg      *config.Config
+	notifier *notifier.Notifier
 }
 
-// New creates a new Monitor from the given config and alert sender.
-func New(cfg *config.Config, alerts AlertSender) *Monitor {
-	m := &Monitor{
-		jobs:   make(map[string]*JobState),
-		cfg:    cfg,
-		alerts: alerts,
-	}
+// New creates a Monitor for the given config and optional notifier.
+func New(cfg *config.Config, n *notifier.Notifier) *Monitor {
+	states := make(map[string]*State, len(cfg.Jobs))
 	for _, j := range cfg.Jobs {
-		m.jobs[j.Name] = &JobState{Name: j.Name}
+		states[j.Name] = &State{}
 	}
-	return m
+	return &Monitor{cfg: cfg, notifier: n, states: states}
 }
 
 // RecordSuccess marks a job as having completed successfully.
 func (m *Monitor) RecordSuccess(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	state, ok := m.jobs[name]
-	if !ok {
-		log.Printf("[monitor] unknown job: %s", name)
-		return
-	}
-	state.LastSeen = time.Now()
-	state.MissedCount = 0
-	state.Failed = false
-	log.Printf("[monitor] job %q succeeded", name)
+	st := m.stateFor(name)
+	st.LastRun = time.Now()
+	st.LastError = nil
+	st.Drifted = false
 }
 
 // RecordFailure marks a job as failed and sends an alert.
-func (m *Monitor) RecordFailure(name string, reason string) {
+func (m *Monitor) RecordFailure(name string, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	state, ok := m.jobs[name]
-	if !ok {
-		log.Printf("[monitor] unknown job: %s", name)
-		return
-	}
-	state.LastSeen = time.Now()
-	state.Failed = true
-	log.Printf("[monitor] job %q failed: %s", name, reason)
-	m.alerts.Send(Alert{Job: name, Kind: KindFailure, Message: reason})
+	st := m.stateFor(name)
+	st.LastRun = time.Now()
+	st.LastError = err
+	m.sendAlert(fmt.Sprintf("job %q failed: %v", name, err))
 }
 
-// CheckDrift inspects all jobs for schedule drift and alerts if overdue.
-func (m *Monitor) CheckDrift() {
+// CheckDrift inspects whether a job has exceeded its expected interval.
+func (m *Monitor) CheckDrift(name string, maxAge time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, j := range m.cfg.Jobs {
-		state := m.jobs[j.Name]
-		if state.LastSeen.IsZero() {
-			continue
-		}
-		deadline := state.LastSeen.Add(time.Duration(j.IntervalMinutes) * time.Minute * 2)
-		if time.Now().After(deadline) {
-			state.MissedCount++
-			log.Printf("[monitor] job %q drift detected (missed: %d)", j.Name, state.MissedCount)
-			m.alerts.Send(Alert{Job: j.Name, Kind: KindDrift, Message: "job overdue"})
-		}
+	st := m.stateFor(name)
+	if st.LastRun.IsZero() {
+		return
 	}
+	if time.Since(st.LastRun) > maxAge {
+		st.Drifted = true
+		m.sendAlert(fmt.Sprintf("job %q has not run in %v", name, maxAge))
+	}
+}
+
+// States returns a snapshot of all job states.
+func (m *Monitor) States() map[string]State {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]State, len(m.states))
+	for k, v := range m.states {
+		out[k] = *v
+	}
+	return out
+}
+
+func (m *Monitor) stateFor(name string) *State {
+	if _, ok := m.states[name]; !ok {
+		m.states[name] = &State{}
+	}
+	return m.states[name]
+}
+
+func (m *Monitor) sendAlert(msg string) {
+	if m.notifier == nil {
+		return
+	}
+	_ = m.notifier.Send(msg)
 }
