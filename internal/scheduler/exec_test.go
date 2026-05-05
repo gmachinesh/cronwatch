@@ -51,6 +51,14 @@ func TestExecCommand_Timeout(t *testing.T) {
 	}
 }
 
+func TestExecCommand_NoTimeout(t *testing.T) {
+	// Ensure a fast command completes successfully within a generous timeout.
+	err := execCommandWithTimeout("echo cronwatch", 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected success within timeout, got: %v", err)
+	}
+}
+
 func TestExecError_Message(t *testing.T) {
 	err := execCommand("ls /nonexistent_cronwatch_path_xyz")
 	if err == nil {
