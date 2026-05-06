@@ -76,6 +76,33 @@ func (h *History) Recent(n int, jobName string) ([]Entry, error) {
 	return filtered, nil
 }
 
+// Prune removes entries older than the given age from the history file.
+// It rewrites the file in place, keeping only entries whose StartedAt
+// timestamp is within maxAge of the current time.
+func (h *History) Prune(maxAge time.Duration) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	all, err := h.readAll()
+	if err != nil {
+		return 0, err
+	}
+
+	cutoff := time.Now().Add(-maxAge)
+	var keep []Entry
+	for _, e := range all {
+		if e.StartedAt.After(cutoff) {
+			keep = append(keep, e)
+		}
+	}
+
+	removed := len(all) - len(keep)
+	if removed == 0 {
+		return 0, nil
+	}
+	return removed, h.writeAll(keep)
+}
+
 // readAll reads every entry from the file. Caller must hold h.mu.
 func (h *History) readAll() ([]Entry, error) {
 	data, err := os.ReadFile(h.path)
