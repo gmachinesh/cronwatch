@@ -2,44 +2,30 @@ package notifier
 
 import "fmt"
 
-// Backend is the interface implemented by all notification backends.
-type Backend interface {
+// Notifier is the interface implemented by all alert backends.
+type Notifier interface {
 	Send(subject, body string) error
 }
 
-// Notifier wraps a Backend and provides a unified Send method.
-type Notifier struct {
-	backend Backend
-}
-
-// New constructs a Notifier for the given backend type and options.
-// Supported backends: "slack", "email", "webhook".
-func New(backendType string, opts map[string]string) (*Notifier, error) {
-	var (
-		b   Backend
-		err error
-	)
-	switch backendType {
+// New constructs a Notifier for the given backend type using the provided
+// options map. Returns an error if the backend is unknown or misconfigured.
+func New(backend string, opts map[string]string) (Notifier, error) {
+	switch backend {
 	case "slack":
-		b, err = newSlackBackend(opts)
+		return newSlackBackend(opts)
 	case "email":
-		b, err = newEmailBackend(opts)
+		return newEmailBackend(opts)
 	case "webhook":
-		b, err = newWebhookBackend(opts)
+		return newWebhookBackend(opts)
+	case "pagerduty":
+		return newPagerDutyBackend(opts)
+	case "opsgenie":
+		return newOpsGenieBackend(opts)
+	case "teams":
+		return newTeamsBackend(opts)
+	case "victorops":
+		return newVictorOpsBackend(opts)
 	default:
-		return nil, fmt.Errorf("notifier: unknown backend %q", backendType)
+		return nil, fmt.Errorf("notifier: unknown backend %q", backend)
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &Notifier{backend: b}, nil
-}
-
-// Send dispatches an alert via the configured backend.
-// If no backend is configured it is a no-op.
-func (n *Notifier) Send(subject, body string) error {
-	if n == nil || n.backend == nil {
-		return nil
-	}
-	return n.backend.Send(subject, body)
 }
