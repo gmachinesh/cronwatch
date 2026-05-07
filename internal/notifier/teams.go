@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -62,7 +63,8 @@ func (t *teamsBackend) Send(subject, body string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("teams notifier: unexpected status code %d", resp.StatusCode)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("teams notifier: unexpected status code %d: %s", resp.StatusCode, bytes.TrimSpace(respBody))
 	}
 	return nil
 }
